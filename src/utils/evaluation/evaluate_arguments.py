@@ -188,12 +188,18 @@ async def call_evaluation_llm(predicted_calls: List[Dict],
     
     # Second pass: execute batch LLM calls
     if batch_requests:
+        # Shared across every batch below so max_concurrent is an actual cap
+        # on concurrent judge calls, not just a per-batch chunk size.
+        llm_call_semaphore = asyncio.Semaphore(max_concurrent)
         for batch_start in range(0, len(batch_requests), batch_size):
             batch_end = min(batch_start + batch_size, len(batch_requests))
             current_batch = batch_requests[batch_start:batch_end]
             current_metadata = batch_metadata[batch_start:batch_end]
             # Execute batch of LLM calls concurrently
-            tasks = [_call_llm_with_semaphore(request, judge_model, gen_config) for request in current_batch]
+            tasks = [
+                _call_llm_with_semaphore(request, judge_model, gen_config, llm_call_semaphore)
+                for request in current_batch
+            ]
             batch_results = await asyncio.gather(*tasks, return_exceptions=True)
             
             # Process batch results with ID matching

@@ -366,12 +366,28 @@ async def evaluate_directory(directory_path: str, eval_config: Dict[str, Any],
                     save_incremental_result(error_result, temp_dir, len(all_results))
         else:
             logger.info(f"Starting concurrent evaluation of {total_files} remaining files...")
-            
+
+            # Cap how many files are evaluated concurrently. Each file's own
+            # argument-evaluation step already runs up to
+            # eval_config["max_concurrent"] judge calls concurrently, so
+            # without this cap the two multiply: total_files (unbounded) x
+            # max_concurrent judge calls each could burst to hundreds of
+            # concurrent requests against a single judge model endpoint.
+            # Reuse the existing --batch-size knob rather than adding a new one.
+            file_concurrency = max(1, eval_config.get("batch_size", 50))
+            file_semaphore = asyncio.Semaphore(file_concurrency)
+
+            async def _evaluate_file_with_semaphore(file_path):
+                async with file_semaphore:
+                    return await evaluate_single_file(
+                        file_path, eval_config, tool_descriptions, save_llm_results, llm_results_dir, judge_model
+                    )
+
             # Create tasks for remaining files
             tasks = []
             for i, file_path in enumerate(remaining_files, 1):
                 logger.info(f"Queuing file {i}/{total_files}: {os.path.basename(file_path)}")
-                task = evaluate_single_file(file_path, eval_config, tool_descriptions, save_llm_results, llm_results_dir, judge_model)
+                task = _evaluate_file_with_semaphore(file_path)
                 tasks.append(task)
             
             # Execute all tasks concurrently and collect results

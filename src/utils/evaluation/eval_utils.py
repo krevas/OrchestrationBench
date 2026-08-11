@@ -610,15 +610,19 @@ def combine_analysis_with_llm_results(
 # =============================================================================
 
 async def _call_llm_with_semaphore(
-    messages: List[Dict], 
-    model: ModelFactory, 
+    messages: List[Dict],
+    model: ModelFactory,
     gen_config: Dict,
+    semaphore: asyncio.Semaphore,
     max_retries: int = 3,
-    max_concurrent: int = 5
 ) -> Dict:
-    """Call LLM with concurrency control via semaphore."""
-    semaphore = asyncio.Semaphore(max_concurrent)
-    
+    """Call LLM with concurrency control via a caller-supplied, shared semaphore.
+
+    NOTE: the semaphore must be created once by the caller and shared across
+    every concurrent call in the batch. Creating a fresh Semaphore() inside
+    this function (the previous behavior) is a no-op for limiting
+    concurrency - each coroutine would only ever contend with itself.
+    """
     logger.debug(f"LLM messages: {messages}")
     async with semaphore:
         return await _call_llm(messages, model, gen_config, max_retries)
