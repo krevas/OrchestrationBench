@@ -34,14 +34,21 @@ class OpenSourceModel(BaseModel):
         """Initialize the HTTP session."""
         timeout = aiohttp.ClientTimeout(total= 360)
         self.session = aiohttp.ClientSession(timeout=timeout)
-        
+
         # Test the connection
         try:
             await self.check_availability()
             self.initialized = True
             logger.info(f"OpenSource model {self.model_name} initialized successfully")
-        except Exception as e:
+        except BaseException as e:
+            # BaseException (not just Exception) so that asyncio.CancelledError -
+            # raised e.g. when a sibling task in the same gather()/semaphore batch
+            # fails - doesn't leave this half-opened session orphaned. An orphaned
+            # ClientSession only gets cleaned up later by the garbage collector,
+            # which is what produces the "Unclosed client session"/"Unclosed
+            # connector" warnings.
             logger.error(f"Failed to initialize OpenSource model: {e}")
+            await self.close()
             raise
     
     async def generate_response(
