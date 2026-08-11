@@ -210,12 +210,21 @@ class OrchestrationBenchTask:
         process_env["TERM"] = "dumb"
         process_env["NO_COLOR"] = "1"
 
-        with open(log_path, "w") as log_file:
+        # Force UTF-8 for the child process's stdout/stderr. Without this,
+        # on Windows the child inherits the console's legacy codepage (e.g.
+        # cp949 for Korean locale) and crashes with UnicodeEncodeError as
+        # soon as it prints a non-ASCII character (emoji, checkmarks, etc.).
+        process_env["PYTHONIOENCODING"] = "utf-8"
+        process_env["PYTHONUTF8"] = "1"
+
+        with open(log_path, "w", encoding="utf-8") as log_file:
             process = subprocess.Popen(
                 cmd,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 cwd=self.orchestration_bench_dir,
                 env=process_env,
                 bufsize=1,
@@ -342,7 +351,7 @@ class OrchestrationBenchTask:
         logger.info(f"Evaluation for {language} completed")
 
         if os.path.exists(output_file):
-            with open(output_file, "r") as f:
+            with open(output_file, "r", encoding="utf-8") as f:
                 return json.load(f)
         else:
             logger.warning(f"Evaluation output file not found: {output_file}")
@@ -454,7 +463,7 @@ class OrchestrationBenchTask:
                 lm_eval_style_result_path = os.path.join(
                     self.save_dir, "lm_eval_style_result.json"
                 )
-                with open(lm_eval_style_result_path, "w") as f:
+                with open(lm_eval_style_result_path, "w", encoding="utf-8") as f:
                     json.dump(lm_eval_style_result, f, indent=4, ensure_ascii=False)
 
                 result_hf_path = os.path.join(

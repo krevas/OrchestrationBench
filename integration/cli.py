@@ -9,6 +9,14 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
+# Force UTF-8 for stdout/stderr. On Windows, Python otherwise inherits the
+# console's legacy codepage (e.g. cp949 for Korean locale), which raises
+# UnicodeEncodeError as soon as any log line (ours or a child process's,
+# streamed through us) contains a non-ASCII character such as an emoji.
+for _stream in (sys.stdout, sys.stderr):
+    if hasattr(_stream, "reconfigure"):
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+
 import typer
 from loguru import logger
 from omegaconf import OmegaConf
