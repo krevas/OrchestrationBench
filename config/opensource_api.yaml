@@ -15,7 +15,8 @@ model:
   model: my-model
   model_url: http://localhost:8000/v1  # External vLLM server URL
   api_key: EMPTY
-  temperature: 0.2
+  # NOTE: generation temperature is controlled by benchmark.temperature below,
+  # not here — model.temperature is not read by the pipeline.
 
 # Option 2: Start a local vLLM server automatically
 # Uncomment below and comment out Option 1
@@ -29,8 +30,8 @@ model:
 benchmark:
   temperature: 0.2
   num_iter: 3
-  batch_size: 50
-  max_retries: 10
+  batch_size: 10  # concurrent requests against the external server; raise if your server can take it
+  max_retries: 3  # keep low while validating a new server/model; raise once runs are confirmed stable
 
   # Optional: HuggingFace Hub upload settings
   # hf_hug_log_args:
