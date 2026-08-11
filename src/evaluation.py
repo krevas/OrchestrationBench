@@ -3,6 +3,7 @@ import json
 import yaml
 import glob
 import asyncio
+import functools
 import sys
 from pathlib import Path
 from typing import Dict, Any, Set, List, Optional, Tuple
@@ -144,7 +145,20 @@ async def evaluate_single_file(file_path: str,
         # Workflow DAG evaluation (구조 및 상태 평가)
         logger.info("Running workflow DAG evaluation...")
         try:
-            dag_results = evaluate_workflow_multiple_runs(data, agent_change_weight=agent_change_weight, status_change_weight=status_change_weight)
+            # evaluate_workflow_multiple_runs() runs nx.graph_edit_distance()
+            # (CPU-bound, potentially expensive) synchronously. Run it in the
+            # default thread pool so it doesn't block the event loop and stall
+            # every other file's judge-call I/O and DAG evaluation that are
+            # supposedly running concurrently in evaluate_directory().
+            dag_results = await asyncio.get_running_loop().run_in_executor(
+                None,
+                functools.partial(
+                    evaluate_workflow_multiple_runs,
+                    data,
+                    agent_change_weight=agent_change_weight,
+                    status_change_weight=status_change_weight,
+                ),
+            )
             if not isinstance(dag_results, dict):
                 logger.warning(f"DAG evaluation returned unexpected type: {type(dag_results)}")
                 dag_results = {
