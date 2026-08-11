@@ -32,7 +32,7 @@ class OpenSourceModel(BaseModel):
 
     async def initialize(self) -> None:
         """Initialize the HTTP session."""
-        timeout = aiohttp.ClientTimeout(total= 360)
+        timeout = aiohttp.ClientTimeout(total=900)
         self.session = aiohttp.ClientSession(timeout=timeout)
 
         # Test the connection

@@ -62,6 +62,16 @@ class SimpleHistoryGenerator:
         self.batch_size = batch_size
         self.max_retries = max_retries
 
+        # Single shared semaphore for every real outbound call to the model
+        # server (orchestrator planning calls AND sub-agent calls). Scenarios
+        # are also processed with a batch_size-sized semaphore one level up
+        # (stepwise_scenario_processor.py), so without a *shared* budget here
+        # the two limits multiply instead of composing: up to batch_size
+        # scenarios in flight, each making up to batch_size concurrent agent
+        # calls, i.e. batch_size^2 concurrent requests against one server.
+        # This semaphore makes batch_size an actual global concurrency cap.
+        self._call_semaphore = asyncio.Semaphore(max(1, batch_size))
+
         # Initialize components
         self.orchestration_engine = None
         self.orchestration_agent = None
@@ -351,10 +361,12 @@ class SimpleHistoryGenerator:
         logger.debug(f"  🔧 Retry configuration: max_retries={self.max_retries}")
         
         all_results = []
-        
-        # Semaphore를 사용한 동시성 제어 (옵션)
-        semaphore = asyncio.Semaphore(batch_size * 2)  # 전체 동시 실행 제한
-        
+
+        # Use the shared, instance-level semaphore so this doesn't add its own
+        # independent concurrency budget on top of the per-scenario one in
+        # stepwise_scenario_processor.py (see __init__ for why that matters).
+        semaphore = self._call_semaphore
+
         async def execute_with_semaphore(task_data, task_index):
             """Semaphore를 사용한 task 실행 wrapper"""
             async with semaphore:
@@ -619,10 +631,14 @@ class SimpleHistoryGenerator:
                 for attempt in range(self.max_retries + 1):
                     try:
                         logger.debug(f"  🔄 Workflow generation attempt {attempt + 1}/{self.max_retries + 1}")
-                        response = await self.orchestration_agent.generate_workflow(
-                            msgs=current_history,
-                            system_info=system_info
-                        )
+                        # Share the same call budget as execute_agents_batch() -
+                        # this call previously had no per-call concurrency gate
+                        # at all beyond the outer per-scenario semaphore.
+                        async with self._call_semaphore:
+                            response = await self.orchestration_agent.generate_workflow(
+                                msgs=current_history,
+                                system_info=system_info
+                            )
                         
                         # Add to main_agent_history with step_id
                         history_entry = {"step_id": step.step_id}
@@ -639,9 +655,14 @@ class SimpleHistoryGenerator:
                     except Exception as e:
                         error_msg = str(e)
                         logger.debug(f"  ❌ Workflow generation attempt {attempt + 1} failed: {error_msg}")
-                        
-                        # Check if this is a retryable error
+
+                        # Check if this is a retryable error.
+                        # NOTE: asyncio/aiohttp raise a bare TimeoutError/ConnectionError
+                        # with no message (str(e) == ""), so the substring checks below
+                        # never match for the most common failure mode (a slow/overloaded
+                        # server). Check the exception type directly as well.
                         is_retryable = (
+                            isinstance(e, (TimeoutError, ConnectionError, OSError)) or
                             "500" in error_msg or
                             "timeout" in error_msg.lower() or
                             "connection" in error_msg.lower() or
