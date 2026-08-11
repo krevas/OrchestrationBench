@@ -377,7 +377,14 @@ class SimpleHistoryGenerator:
                     step = task_data[0]
                     logger.debug(f"    💥 Exception in execute_with_semaphore for {step.agent}: {type(e).__name__}: {e}", style="red")
                     return e, task_index
-        
+
+        async def _retry_with_semaphore(task_data):
+            # Route retries through the same shared semaphore as the first
+            # attempt - without this, retries bypass the global call budget
+            # entirely (this is what the earlier code did).
+            async with semaphore:
+                return await self.execute_agent_and_record(*task_data)
+
         # Process tasks in chunks of batch_size
         for i in range(0, len(batch_tasks), batch_size):
             batch_chunk = batch_tasks[i:i + batch_size]
@@ -452,11 +459,11 @@ class SimpleHistoryGenerator:
                     
                     for retry_idx in range(0, len(retry_tasks), retry_batch_size):
                         retry_chunk = retry_tasks[retry_idx:retry_idx + retry_batch_size]
-                        
+
                         retry_coroutines = []
                         for task_data, original_idx in retry_chunk:
-                            retry_coroutines.append(self.execute_agent_and_record(*task_data))
-                        
+                            retry_coroutines.append(_retry_with_semaphore(task_data))
+
                         try:
                             retry_results = await asyncio.gather(*retry_coroutines, return_exceptions=True)
                             
