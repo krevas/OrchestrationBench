@@ -936,6 +936,87 @@ def _extract_actual_call(step_id: str, label_history: Dict, total_label_count: L
     }
     return actual_call, actual_function_names
 
+def _parse_predicted_tool_call_from_content(content: str) -> Dict[str, Any] | None:
+    """
+    Fallback parser for tool calls a model wrote as raw JSON text in `content`
+    instead of using the API's structured `tool_calls` field.
+
+    The benchmark's "select_tools" system prompt instructs agents to
+    "return ONLY the tool call JSON format with no additional text" - a text
+    convention of the shape {"tool": "...", "arguments"/"parameters": {...}}
+    (optionally {"tool_call": [...]} for multiple calls). This is the same
+    convention step_history_generator.parse_tool_content() already parses
+    for LABEL data; some models (e.g. when the server's tool-call parser
+    doesn't kick in for a given chat template) follow that literal
+    instruction instead of emitting a structured tool_calls entry, and
+    without this fallback such calls were scored as "no call made" even when
+    the model called the right tool with the right arguments.
+
+    Handles the shapes actually observed in practice, in addition to the
+    benchmark's own {"tool": ..., "arguments"/"parameters": ...} convention:
+    - Wrapped in <tool_call>...</tool_call> tags (Hermes/Qwen-style, emitted
+      as literal text when the server's tool-call parser doesn't strip it).
+    - {"name": ..., "arguments": ...} - the OpenAI function-call field names,
+      used verbatim instead of this benchmark's "tool" key.
+    - {"tool_call": {...}} as a single object instead of a list.
+
+    Deliberately does NOT try to guess a function name for a bare arguments
+    dict with no name/tool key at all (e.g. {"refinedQuery": "..."}) - most
+    agents expose several tools with overlapping parameter names, so
+    guessing would risk crediting/penalizing the wrong tool rather than
+    leaving a genuinely ambiguous case unscored.
+    """
+    if not content or not isinstance(content, str):
+        return None
+
+    text = content.strip().split("</think>")[-1].strip()
+    # Strip <tool_call>/<function_call> wrapper tags some chat templates use
+    # when the server doesn't parse them into structured tool_calls.
+    text = re.sub(r"</?(?:tool_call|function_call)>", "", text, flags=re.IGNORECASE).strip()
+
+    json_matches = re.findall(r'\{.*\}', text, re.DOTALL)
+    if not json_matches:
+        return None
+
+    for candidate in reversed(json_matches):
+        try:
+            parsed = json.loads(candidate)
+        except (json.JSONDecodeError, TypeError):
+            continue
+        if not isinstance(parsed, dict):
+            continue
+
+        calls = parsed.get("tool_call")
+        if calls is None:
+            if not (parsed.get("tool") or parsed.get("name")):
+                continue
+            calls = [parsed]
+        elif isinstance(calls, dict):
+            calls = [calls]
+        elif not isinstance(calls, list):
+            continue
+
+        predicted_function_names = []
+        predicted_aggregated_arguments = {}
+        for call in calls:
+            if not isinstance(call, dict):
+                continue
+            name = call.get("tool") or call.get("name")
+            if not name:
+                continue
+            arguments = call.get("arguments", call.get("parameters", {}))
+            _process_tool_call_arguments(arguments, predicted_aggregated_arguments)
+            predicted_function_names.append(name)
+
+        if predicted_function_names:
+            return {
+                "function_name": predicted_function_names,
+                "arguments": predicted_aggregated_arguments,
+            }
+
+    return None
+
+
 def _extract_predicted_call(one_step: Dict) -> Dict:
     """Extract predicted call from one_step."""
     # Handle tool calls
@@ -953,6 +1034,9 @@ def _extract_predicted_call(one_step: Dict) -> Dict:
                 "arguments": {"TOOL_CONSTRAINT_VIOLATION": "true"}
             }
         else:
+            fallback = _parse_predicted_tool_call_from_content(content)
+            if fallback is not None:
+                return fallback
             # Empty tool_calls but no clear rejection signal - might be a mistake
             # Return a "no function call" result instead of None to allow comparison
             return {

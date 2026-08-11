@@ -67,6 +67,8 @@ OrchestrationBench/
 
 > Note: `claude-opus-4-7` and `gpt-5.4-2026-03-05` were run with `num_iter=3`. `gemini-3.1-pro-preview` was run with `num_iter=1` due to longer per-call latency.
 
+> **⚠️ Prompt version note (2026-08-12):** `config/base_config/multiagent_config.yaml`'s `select_tools` prompt was changed to instruct agents to invoke tools via the API's native tool-calling mechanism instead of writing the call out as JSON text in the response. The scores in the table above were generated with the *previous* prompt version and may not be directly comparable to results produced after this change (mainly affects the Function Call score for models that don't strongly prioritize native tool-calling when given ambiguous instructions). Re-run affected models to get comparable numbers.
+
 ## 🚀 Quick Start
 
 ### Prerequisites
